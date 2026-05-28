@@ -32,10 +32,23 @@ int main()
 
     //发送信息
     char *msg = "hello server";
-    write(fd,msg,strlen(msg));
+    ssize_t sent = write(fd,msg,strlen(msg));
+    if(sent==-1)
+    {
+        perror("write");
+        close(fd);
+        exit(1);
+    }
     //接收信息
-    int *buf[1024];
-    read(fd,buf,sizeof(buf));
+    char buf[1024];
+    ssize_t received = read(fd,buf,sizeof(buf)-1);
+    if(received==-1)
+    {
+        perror("read");
+        close(fd);
+        exit(1);
+    }
+    buf[received] = '\0';
     //输出服务端信息
     printf("服务端信息：%s\n",buf);
     //关闭连接

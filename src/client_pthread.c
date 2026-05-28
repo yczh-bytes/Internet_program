@@ -48,18 +48,28 @@ void * working(void *arg)
         sleep(1);
         
     }
-    free(buf);
+
     close(info->fd);
     return NULL;
 }
 int main()
 {
+    //创建端口复用
+    int opt = 1;//赋值为1传入参数代表开启端口复用
+   
     // 创建socket
     int fd = socket(AF_INET, SOCK_STREAM, 0);
 
     if(fd == -1)
     {
         perror("socket");
+        exit(1);
+    }
+
+     //设置端口复用
+    if(setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt))==-1)
+    {
+        perror("setsockopt");
         exit(1);
     }
 
