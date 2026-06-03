@@ -21,12 +21,15 @@ static int m_epollfd;//共享epollfd实例
 static int m_users;//当前用户连接数
     http_conn();
     ~http_conn();
+    //实现业务逻辑
     void process();
     void addfd(int sockfd,int epollfd,bool one_shot);
     void removefd(int sockfd,int epollfd);
     void modfd(int sockfd,int epollfd,int ev);
     void init(int sockfd,struct sockaddr_in client_address);
     void close_conn();
+    bool read();//非阻塞读取
+    bool write();//非阻塞写入
 
 private:
 

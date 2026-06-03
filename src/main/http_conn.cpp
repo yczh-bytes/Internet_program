@@ -4,7 +4,7 @@ int http_conn::m_epollfd = -1;
 int http_conn::m_users = 0;
 
 //添加文件描述符
-void addfd(int sockfd,int epollfd,bool one_shot)
+void http_conn::addfd(int sockfd,int epollfd,bool one_shot)
 {
     struct epoll_event event;
     event.data.fd = sockfd;
@@ -17,7 +17,7 @@ void addfd(int sockfd,int epollfd,bool one_shot)
 
 }
 //删除文件描述符
-void removefd(int sockfd,int epollfd)
+void http_conn::removefd(int sockfd,int epollfd)
 {
     int ret = epoll_ctl(epollfd,EPOLL_CTL_DEL,sockfd,NULL);
     if(ret==-1)
@@ -28,10 +28,10 @@ void removefd(int sockfd,int epollfd)
     close(sockfd);
 }
 //修改文件描述符
-void modfd(int sockfd,int epollfd,int ev)
+void http_conn::modfd(int sockfd,int epollfd,int ev)
 {
     struct epoll_event event;
-    event.events = EPOLLIN|EPOLLRDHUP|EPOLLONESHOT;//LT模式
+event.events = ev | EPOLLRDHUP|EPOLLONESHOT;//LT模式
     int ret = epoll_ctl(epollfd,EPOLL_CTL_MOD,sockfd,&event);
     if(ret==-1)
     {
@@ -39,7 +39,7 @@ void modfd(int sockfd,int epollfd,int ev)
     }
 }
 //初始化连接
-void init(int sockfd,struct sockaddr_in client_address)
+void http_conn::init(int sockfd,struct sockaddr_in client_address)
 {
     m_sockfd = sockfd;
     m_addr = client_address;
@@ -57,7 +57,7 @@ void init(int sockfd,struct sockaddr_in client_address)
     m_users++;
 }
 //关闭连接
-void close_conn()
+void http_conn::close_conn()
 {
     if(m_sockfd!=-1)
     {
@@ -68,6 +68,17 @@ void close_conn()
         m_users--;
     }
 }
+
+bool http_conn::read()
+{
+    printf("read\n");
+    return true;
+}
+bool http_conn::write()
+{
+    printf("write\n");
+    return true;
+}
 http_conn::http_conn()
 {
 }
@@ -76,6 +87,7 @@ http_conn::~http_conn()
 }
 void http_conn::process()
 {
+    printf("process\n");
 }
 
 

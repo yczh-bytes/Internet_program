@@ -1,10 +1,10 @@
-#include "http_conn.h"
-#include "threadpool.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <libgen.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -12,16 +12,15 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <errno.h>
+
+#include "http_conn.h"
+#include "threadpool.h"
 
 #define MAX_FD 65535//最大并发连接数
 #define MAX_EVENT_NUMBER 10000//最大事件数
 
-//声明外部函数
-    extern void addfd(int sockfd,int epollfd,bool one_shot);
-    extern void removefd(int sockfd,int epollfd);
-    extern void modfd(int sockfd,int epollfd,int ev);
-    extern void init(int sockfd,struct sockaddr_in client_address);
-    extern void close_conn();
+
 //信号处理函数
 void addsig(int signum,void (*handler)(int))
 {
@@ -41,6 +40,7 @@ int main(int argc,char *argv[])
     if(argc<=1)
     {
         printf("Usage:%s port\n",basename(argv[0]));
+        return -1;
     }
     //获取端口号
     int port = atoi(argv[1]);
@@ -82,7 +82,7 @@ int main(int argc,char *argv[])
    addr_.sin_addr.s_addr = htonl(INADDR_ANY);
    addr_.sin_port = htons(port);
 
-   int bd = bind(sockfd,(struct sockaddr*)addr_,sizeof(addr_));
+   int bd = bind(sockfd,(struct sockaddr*)&addr_,sizeof(addr_));
    if(bd==-1)
    {
     throw std::runtime_error("bind");
@@ -103,7 +103,13 @@ int main(int argc,char *argv[])
    }
    
  //添加监听fd到epoll
-    addfd(sockfd,epollfd,false);
+    struct epoll_event event;
+    event.data.fd = sockfd;
+    event.events = EPOLLIN | EPOLLRDHUP;
+    if(epoll_ctl(epollfd, EPOLL_CTL_ADD, sockfd, &event) == -1)
+    {
+        throw std::runtime_error("epoll_ctl");
+    }
     struct epoll_event m_address[MAX_EVENT_NUMBER];
    http_conn::m_epollfd = epollfd;
     //连接相关成员变量
@@ -138,12 +144,26 @@ int main(int argc,char *argv[])
             }
             //添加新链接到数组
             users[connfd].init(connfd,client_address);
-            //异常事件处理
-            else if(m_address[i].events&EPOLLERR|EPOLLRDHUP|EPOLLHUP)
-            {
-                //关闭连接
-                users[connfd].close_conn();
-            }
+        }
+        //处理异常事件
+        else if(m_address[i].events&(EPOLLERR|EPOLLRDHUP|EPOLLHUP))
+        {
+            //关闭连接
+            users[m_address[i].data.fd].close_conn();
+        }
+        //处理读事件
+        else if(m_address[i].events&EPOLLIN)
+        {
+            //读取数据
+            users[m_address[i].data.fd].read();
+            //添加到线程池
+            pool->append(users+m_address[i].data.fd);
+        }
+        //处理写事件
+        else if(m_address[i].events&EPOLLOUT)
+        {
+            //写入数据
+            users[m_address[i].data.fd].write();
         }
     }
 

@@ -84,8 +84,8 @@ void* threadpool<T>::thread_func(void* arg)
 }
 
 //实现run函数
-
-void threadpool::run()
+template<typename T>
+void threadpool<T>::run()
 {
     while(!m_stop)
     {
