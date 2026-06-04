@@ -113,8 +113,6 @@ int main(int argc,char *argv[])
     struct epoll_event m_address[MAX_EVENT_NUMBER];
    http_conn::m_epollfd = epollfd;
     //连接相关成员变量
-    int m_sockfd = sockfd;
-
    //主循环
    while(true)
    {

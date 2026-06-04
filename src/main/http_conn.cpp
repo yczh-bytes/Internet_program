@@ -8,6 +8,7 @@ void http_conn::addfd(int sockfd,int epollfd,bool one_shot)
 {
     struct epoll_event event;
     event.data.fd = sockfd;
+    
     event.events = EPOLLIN|EPOLLRDHUP|EPOLLONESHOT;//LT模式
     int ret = epoll_ctl(epollfd,EPOLL_CTL_ADD,sockfd,&event);
     if(ret==-1)
@@ -62,7 +63,7 @@ void http_conn::close_conn()
     if(m_sockfd!=-1)
     {
         removefd(m_sockfd,m_epollfd);
-        close(m_sockfd);
+        // removefd已经调用close，这里不需要再重复close
         m_sockfd = -1;
         //用户基数减少
         m_users--;
