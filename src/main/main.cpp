@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,58 +56,75 @@ int main(int argc,char *argv[])
    }
    catch(...)
    {
+    printf("Error: failed to create thread pool\n");
     exit(-1);
    }
 
    //创建套接字
-   int sockfd = socket(AF_INET,SOCK_STREAM,0);
-   if(sockfd==-1)
-   {
-    throw std::runtime_error("socket");
-   }
-   //设置端口复用
-   int opt = 1;
-   if(setsockopt(sockfd,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt))==-1)
-   {
-    throw std::runtime_error("setsockopt");
-   }
+    int sockfd = socket(AF_INET,SOCK_STREAM,0);
+    if(sockfd==-1)
+    {
+     perror("socket");
+     exit(-1);
+    }
+    //设置端口复用
+    int opt = 1;
+    if(setsockopt(sockfd,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt))==-1)
+    {
+     perror("setsockopt");
+     close(sockfd);
+     exit(-1);
+    }
 
-   //创建连接数组，储存所有的客户端连接信息
-   http_conn * users = new http_conn[MAX_FD];
-   
-   //绑定地址
-   struct sockaddr_in addr_;
-   addr_.sin_family = AF_INET;
-   addr_.sin_addr.s_addr = htonl(INADDR_ANY);
-   addr_.sin_port = htons(port);
+    //创建连接数组，储存所有的客户端连接信息
+    http_conn * users = new http_conn[MAX_FD];
+    
+    //绑定地址
+    struct sockaddr_in addr_;
+    addr_.sin_family = AF_INET;
+    addr_.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr_.sin_port = htons(port);
 
-   int bd = bind(sockfd,(struct sockaddr*)&addr_,sizeof(addr_));
-   if(bd==-1)
-   {
-    throw std::runtime_error("bind");
-   }
+    int bd = bind(sockfd,(struct sockaddr*)&addr_,sizeof(addr_));
+    if(bd==-1)
+    {
+     perror("bind");
+     close(sockfd);
+     delete[] users;
+     exit(-1);
+    }
 
-   //监听
-   int ret = listen(sockfd,5);
-   if(ret==-1)
-   {
-    throw std::runtime_error("listen");
-   }
-   
-   //epoll初始化
-   int epollfd = epoll_create(1);
-   if(epollfd==-1)
-   {
-    throw std::runtime_error("epoll_create");
-   }
-   
+    //监听
+    int ret = listen(sockfd,5);
+    if(ret==-1)
+    {
+     perror("listen");
+     close(sockfd);
+     delete[] users;
+     exit(-1);
+    }
+    
+    //epoll初始化
+    int epollfd = epoll_create(1);
+    if(epollfd==-1)
+    {
+     perror("epoll_create");
+     close(sockfd);
+     delete[] users;
+     exit(-1);
+    }
+    
  //添加监听fd到epoll
     struct epoll_event event;
     event.data.fd = sockfd;
     event.events = EPOLLIN | EPOLLRDHUP;
     if(epoll_ctl(epollfd, EPOLL_CTL_ADD, sockfd, &event) == -1)
     {
-        throw std::runtime_error("epoll_ctl");
+        perror("epoll_ctl");
+        close(sockfd);
+        close(epollfd);
+        delete[] users;
+        exit(-1);
     }
     struct epoll_event m_address[MAX_EVENT_NUMBER];
    http_conn::m_epollfd = epollfd;
@@ -119,7 +135,7 @@ int main(int argc,char *argv[])
     int nfds = epoll_wait(epollfd,m_address,MAX_EVENT_NUMBER,-1);//循环等待事件发生
     if(nfds<0&&errno!=EINTR)
     {
-     throw std::runtime_error("epoll_wait");
+     perror("epoll_wait");
      break;
     }
 
@@ -133,8 +149,15 @@ int main(int argc,char *argv[])
             socklen_t client_address_len = sizeof(client_address);
             int connfd = accept(sockfd,(struct sockaddr*)&client_address,&client_address_len);
 
+            //检查accept是否成功
+            if(connfd==-1)
+            {
+                perror("accept");
+                continue;
+            }
+
             //查看连接数是否达到上限
-            if(http_conn::m_users>=MAX_FD-1)
+            if(connfd>=MAX_FD||http_conn::m_users>=MAX_FD-1)
             {
                 printf("Error:Too many users\n");
                 close(connfd);
@@ -153,18 +176,35 @@ int main(int argc,char *argv[])
         else if(m_address[i].events&EPOLLIN)
         {
             //读取数据
-            users[m_address[i].data.fd].read();
-            //添加到线程池
-            pool->append(users+m_address[i].data.fd);
+            if(users[m_address[i].data.fd].read())
+            {
+                //添加到线程池
+                pool->append(users+m_address[i].data.fd);
+            }
+            else
+            {
+                //读取失败，关闭连接
+                users[m_address[i].data.fd].close_conn();
+            }
         }
         //处理写事件
         else if(m_address[i].events&EPOLLOUT)
         {
             //写入数据
-            users[m_address[i].data.fd].write();
+            if(!users[m_address[i].data.fd].write())
+            {
+                //写入失败，关闭连接
+                users[m_address[i].data.fd].close_conn();
+            }
         }
     }
 
    }
+
+    //清理资源
+    close(sockfd);
+    close(epollfd);
+    delete[] users;
+    delete pool;
     return 0;
 }

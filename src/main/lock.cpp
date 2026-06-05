@@ -11,12 +11,12 @@ locker::locker()
 
 bool locker::lock()
 {
-   return pthread_mutex_lock(&m_mutex);
+   return pthread_mutex_lock(&m_mutex) == 0;
 }
 
 bool locker::unlock()
 {
-    return pthread_mutex_unlock(&m_mutex);
+    return pthread_mutex_unlock(&m_mutex) == 0;
 }
 
 //信号量类
@@ -35,12 +35,12 @@ sem::~sem()
 
 bool sem::wait()
 {
-    return sem_wait(&m_sem);
+    return sem_wait(&m_sem) == 0;
 }
 
 bool sem::post()
 {
-    return sem_post(&m_sem);
+    return sem_post(&m_sem) == 0;
 }
 
 //条件变量类
@@ -59,15 +59,15 @@ condition::~condition()
 
 bool condition::wait(pthread_mutex_t* mutex)
 {
-    return pthread_cond_wait(&m_cond,mutex);
+    return pthread_cond_wait(&m_cond,mutex) == 0;
 }
 
 bool condition::waittime(pthread_mutex_t* mutex, struct timespec timeout)
 {
-    return pthread_cond_timedwait(&m_cond,mutex,&timeout);
+    return pthread_cond_timedwait(&m_cond,mutex,&timeout) == 0;
 }
 
 bool condition::signal()
 {
-    return pthread_cond_signal(&m_cond);
+    return pthread_cond_signal(&m_cond) == 0;
 }

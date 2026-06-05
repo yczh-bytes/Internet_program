@@ -70,11 +70,11 @@ m_thread_num(thread_num),m_threads(NULL),m_max_requests(max_requests),m_queue_lo
     //设置线程分离属性
     for(int i = 0;i<m_thread_num;i++)
     {
-       if(pthread_detach(m_threads[i]))
+       if(pthread_detach(m_threads[i])!=0)
        {
-        throw std::runtime_error("threadpool");
         delete [] m_threads;
         m_threads = NULL;
+        throw std::runtime_error("pthread_detach");
        }
     }
 }
@@ -88,6 +88,8 @@ threadpool<T>::~threadpool()
     {
         m_sem.post();
     }
+    //等待一小段时间让线程退出
+    usleep(100000); // 100ms
     delete [] m_threads;
     m_threads = NULL;
 }
