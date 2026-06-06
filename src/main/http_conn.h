@@ -11,7 +11,11 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
-
+#include <regex>
+#include <string>
+#include <algorithm>
+#include <sys/stat.h>
+#include <cstdarg>
 
 
 // HTTP响应状态行定义
@@ -32,6 +36,7 @@ static int m_epollfd;//共享epollfd实例
 static int m_users;//当前用户连接数
 static const int write_buffer_size = 2408;//写入缓冲区大小
 static const int read_buffer_size = 1024;// 读取缓冲区大小
+static const char doc_root[];// 服务器静态文件根目录
     http_conn();
     ~http_conn();
     //实现业务逻辑
@@ -41,6 +46,7 @@ static const int read_buffer_size = 1024;// 读取缓冲区大小
     void modfd(int sockfd,int epollfd,int ev);
     void init(int sockfd,struct sockaddr_in client_address);
     void close_conn();
+    bool add_response(const char* fmt);//字符串拼接函数
     bool read();//非阻塞读取
     bool write();//非阻塞写入
     
@@ -52,7 +58,7 @@ static const int read_buffer_size = 1024;// 读取缓冲区大小
 ◦`CHECK_STATE_REQUESTLINE`：正在分析请求行。
 ◦`CHECK_STATE_HEADER`：正在分析头部字段。
 ◦`c`：正在解析请求体。*/
-    enum CHECK_STATE{CHECK_STATE_REQUESTLINE=0,CHECK_STATE_HEADER,CHECK_STATE_HEADER};
+    enum CHECK_STATE{CHECK_STATE_REQUESTLINE=0,CHECK_STATE_HEADER,CHECK_STATE_CONTENT};
 
   
 /*•HTTP处理结果码 
@@ -77,7 +83,8 @@ static const int read_buffer_size = 1024;// 读取缓冲区大小
     HTTP_CODE parse_request_line(char *text);//解析请求首行
     HTTP_CODE parse_headers(char *text);//解析请求头
     HTTP_CODE parse_content(char *text);//解析请求体
-    HTTP_CODE parse_line(char *text);//解析请求行
+    LINE_STATUS parse_line();//解析行，返回行状态
+    HTTP_CODE do_request();//处理完整请求
 
 
 private:
@@ -95,6 +102,19 @@ int m_checked_index;//当前分析字母在缓冲区的位置
 int m_start_line;//当前解析行的起始位置
 
 CHECK_STATE m_check_state;//主状态机当前所处的位置
+LINE_STATUS m_line_status;//主状态机每行解析的状态
+
+METHOD m_method;        // 请求方法
+char m_url[256];        // 请求URL
+char m_version[16];     // HTTP版本
+char m_host[128];       // Host头字段值
+int m_content_length;   // Content-Length值, 0表示无请求体
+int m_body_start;       // 请求体在m_read_buf的起始索引
+bool m_keepalive;       // 是否长连接
+
+char m_real_file[256];  //文件真实路径(doc_root+URL)
+struct stat m_file_stat; //stat()获取的文件信息(大小，权限等)
+
 
 //内联函数返回当前起始行位置
 char* get_line(){return m_read_buf+m_start_line;}

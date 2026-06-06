@@ -2,6 +2,7 @@
 
 int http_conn::m_epollfd = -1;
 int http_conn::m_users = 0;
+const char http_conn::doc_root[] = "./www";
 
 //添加文件描述符
 void http_conn::addfd(int sockfd,int epollfd,bool one_shot)
@@ -47,6 +48,7 @@ void http_conn::modfd(int sockfd,int epollfd,int ev)
 //初始化连接
 void http_conn::init(int sockfd,struct sockaddr_in client_address)
 {
+     init();
     m_sockfd = sockfd;
     m_addr = client_address;
     //设置端口复用
@@ -61,7 +63,7 @@ void http_conn::init(int sockfd,struct sockaddr_in client_address)
 
     //用户基数增加
     m_users++;
-    init();
+   
 }
 //关闭连接
 void http_conn::close_conn()
@@ -104,6 +106,40 @@ bool http_conn::read()
 }
   
 
+bool http_conn::add_response(const char* fmt,...)
+{
+    //计算剩余写入空间
+    int write_space = write_buffer_size - m_write_index-1;//1给'\0'结尾
+    if(write_space<0)
+    {
+        return false;
+    }
+
+    //格式化字符串到缓冲区尾部
+    va_list args;
+    va_start(args,fmt);
+
+    //实际写入
+    int true_write = vsnprintf(m_write_buf+m_write_index,write_space,fmt,args);
+    va_end(args);
+
+    //检查是否溢出
+    if(write_space<0)
+    {
+        return false;
+    }
+
+    if(write_space>=0)
+    {
+        m_write_index = write_buffer_size - 1;
+        m_write_buf[m_write_index]='\0';
+        return false;
+    }
+
+    //成功，更新索引
+    m_write_index += true_write;
+    return true;
+}
 
 bool http_conn::write()
 {
@@ -146,15 +182,62 @@ http_conn::~http_conn()
 void http_conn::process()
 {
     HTTP_CODE ret = process_read();
-    if(ret==NO_REQUEST)//请求不完整
+
+    //根据结果构建响应
+    switch(ret)
     {
-        modfd(m_epollfd,m_sockfd,EPOLLIN|EPOLLET);
+        case NO_REQUEST://请求不完整
+    {
+        modfd(m_sockfd,m_epollfd,EPOLLIN);
         return;
     }
+
+    case BAD_REQUEST://解析出错
+    {
+        response_404();//构建404错误响应
+        modfd(sockfd,epollfd,EPOLLOUT);
+        return;
+    }
+
+    case NO_REQUEST://文件不存在
+    {
+        response_400();//构建400错误响应
+        modfd(sockfd,epollfd,EPOLLOUT);
+        return;
+    }
+
+    case FORBIDDEN_REQUEST://无访问权限
+    {
+        response_403();//构建403错误响应
+        modfd(sockfd,epollfd,EPOLLOUT);
+        return;
+    }
+    case INTERNAL_ERROR://服务器内部错误
+    {
+        response_500();//构建500错误响应
+        modfd(sockfd,epollfd,EPOLLOUT);
+
+        return;
+    }
+
+    case FILE_REQUEST://静态文件出错
+    {
+        response_200();//构建200错误响应
+        modfd(sockfd,epollfd,EPOLLOUT);
+
+        return;
+    }
+
+    default:
+    {
+        close_conn();
+        return ;
+    }
+}
 }
 
     
-HTPP_CODE http_conn::HTTP_CODE process_read()
+http_conn::HTTP_CODE http_conn::process_read()
 {
     LINE_STATUS line_status = LINE_OK;
     HTTP_CODE ret = NO_REQUEST;
@@ -163,52 +246,267 @@ HTPP_CODE http_conn::HTTP_CODE process_read()
     while((m_check_state==CHECK_STATE_CONTENT&&line_status==LINE_OK)||(line_status=parse_line())==LINE_OK)
     {
         text = get_line();//获取当前行起始位置
-        m_state_line = m_checked_index;//更新当前检查索引
+        m_start_line = m_checked_index;//更新当前检查索引
 
         switch(m_check_state)
         {
             case CHECK_STATE_REQUESTLINE:
             {
-                parse_request_line(text);
+                ret = parse_request_line(text);
+                if(ret==BAD_REQUEST)
+                {
+                    return BAD_REQUEST;
+                }
                 break;
             }
             case CHECK_STATE_HEADER:
             {
-                parse_headers(text);
+                ret = parse_headers(text);
+                if(ret==BAD_REQUEST)
+                {   
+                    return BAD_REQUEST;
+                }
+                else if(ret == GET_REQUEST)
+                {
+                   return do_request();
+                }
                 break;
             }
-            case CHECK_STATE_HEADER:
+            case CHECK_STATE_CONTENT:
             {
-                parse_content(text);
+                ret = parse_content(text);
+                if(ret == BAD_REQUEST)
+                {
+                    return BAD_REQUEST;
+                }
+                else if(ret == GET_REQUEST)
+                {
+                    return do_request();
+                }
+                line_status = LINE_OPEN;
                 break;
             }
-            default
+            default:
             {
                 return INTERNAL_ERROR;
             }
         }
 
     }
+    return NO_REQUEST;
 }
 
- HTTP_CODE http_conn::HTTP_CODE parse_request_line(char *text)
- {}
+// 从状态机：解析一行（以 \r\n 结尾）
+http_conn::LINE_STATUS http_conn::parse_line()
+{
+    char temp;
+    // m_checked_index 指向当前正在分析的字节位置
+    for(; m_checked_index < m_read_index; ++m_checked_index)
+    {
+        temp = m_read_buf[m_checked_index];
 
- HTTP_CODE http_conn::HTTP_CODE parse_headers(char *text)
- {}
+        if(temp == '\r')
+        {
+            // 当前字符是'\r'，需要检查下一个字符是否是'\n'
+            if(m_checked_index + 1 == m_read_index)
+            {
+                // '\r'是最后一个已接收的字符，行不完整，需要继续读取
+                return LINE_OPEN;
+            }
+            else if(m_read_buf[m_checked_index + 1] == '\n')
+            {
+                // 找到完整的 \r\n，将其替换为 \0\0 便于后续处理
+                m_read_buf[m_checked_index++] = '\0';
+                m_read_buf[m_checked_index++] = '\0';
+                return LINE_OK;
+            }
+            // '\r'后面不是'\n'，行语法错误
+            return LINE_BAD;
+        }
+        else if(temp == '\n')
+        {
+            // 单独出现'\n'（没有前面的'\r'）
+            if(m_checked_index > 0 && m_read_buf[m_checked_index - 1] == '\r')
+            {
+                // 已经在上一个循环处理过 \r\n 的情况，这里应该不会进入
+                // 但如果进入说明前一个字符已经检查过是\r，此时替换
+                m_read_buf[m_checked_index - 1] = '\0';
+                m_read_buf[m_checked_index++] = '\0';
+                return LINE_OK;
+            }
+            // 单独的'\n'，考虑到部分客户端可能只发\n，可以宽容处理
+            m_read_buf[m_checked_index++] = '\0';
+            return LINE_OK;
+        }
+    }
+    // 已检查完所有已读取数据，没有找到行结束符，需要继续读取
+    return LINE_OPEN;
+}
 
- HTTP_CODE http_conn::HTTP_CODE parse_content(char *text)
- {}
+// 用正则表达式解析请求行: METHOD SP URL SP VERSION
+http_conn::HTTP_CODE http_conn::parse_request_line(char *text)
+{
+    // 正则: 大写方法 + 空格 + 非空URL + 空格 + HTTP/x.x
+    std::regex re(R"(^([A-Z]+) ([^ ]+) (HTTP/\d+\.\d+)$)");
+    std::cmatch m;
+    
+    if(!std::regex_match(text, m, re))
+        return BAD_REQUEST;
+    
+    std::string method_str = m[1].str();
+    std::string url_str    = m[2].str();
+    std::string ver_str    = m[3].str();
+    
+    // METHOD 字符串 → 枚举映射
+    if(method_str == "GET")       m_method = GET;
+    else if(method_str == "POST")     m_method = POST;
+    else if(method_str == "HEAD")     m_method = HEAD;
+    else if(method_str == "PUT")      m_method = PUT;
+    else if(method_str == "DELETE")   m_method = DELETE;
+    else if(method_str == "TRACE")    m_method = TRACE;
+    else if(method_str == "OPTIONS")  m_method = OPTIONS;
+    else if(method_str == "CONNECT")  m_method = CONNECT;
+    else return BAD_REQUEST;
+    
+    // URL 长度检查
+    if(url_str.size() >= sizeof(m_url))
+        return BAD_REQUEST;
+    strncpy(m_url, url_str.c_str(), sizeof(m_url) - 1);
+    
+    // 版本字符串存储
+    if(ver_str.size() >= sizeof(m_version))
+        return BAD_REQUEST;
+    strncpy(m_version, ver_str.c_str(), sizeof(m_version) - 1);
+    
+    m_check_state = CHECK_STATE_HEADER;
+    return NO_REQUEST;
+}
 
- HTTP_CODE http_conn::HTTP_CODE parse_line(char *text)
- {}
+// 用正则表达式解析头部字段或空行
+http_conn::HTTP_CODE http_conn::parse_headers(char *text)
+{
+    // 空行 → 头部结束
+    if(*text == '\0')
+    {
+        if(m_content_length > 0)
+        {
+            // 有请求体, 记录起始位置, 转入 CONTENT 状态
+            m_body_start = m_checked_index;
+            m_check_state = CHECK_STATE_CONTENT;
+            return NO_REQUEST;
+        }
+        // 无请求体, 请求解析完成
+        return GET_REQUEST;
+    }
+    
+    // 匹配: Field-Name: value
+    std::regex re(R"(^([[:alnum:]_-]+):\s*(.*?)\s*$)");
+    std::cmatch m;
+    
+    if(!std::regex_match(text, m, re))
+        return BAD_REQUEST;
+    
+    std::string name  = m[1].str();
+    std::string value = m[2].str();
+    
+    // 字段名转小写以便比较
+    std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+    
+    if(name == "host")
+    {
+        if(value.size() >= sizeof(m_host))
+            return BAD_REQUEST;
+        strncpy(m_host, value.c_str(), sizeof(m_host) - 1);
+    }
+    else if(name == "content-length")
+    {
+        try {
+            m_content_length = std::stoi(value);
+            if(m_content_length < 0) return BAD_REQUEST;
+        } catch(...) {
+            return BAD_REQUEST;
+        }
+    }
+    else if(name == "connection")
+    {
+        std::string val_lower = value;
+        std::transform(val_lower.begin(), val_lower.end(), val_lower.begin(), ::tolower);
+        if(val_lower == "keep-alive")
+            m_keepalive = true;
+    }
+    // 其他头部字段忽略
+    
+    return NO_REQUEST;
+}
 
- void http_conn::init()
- {
-m_checked_index=0;
- m_start_line=0;
- m_check_state=CHECK_STATE_REQUESTLINE;
+// 判断请求体是否接收完整
+http_conn::HTTP_CODE http_conn::parse_content(char *text)
+{
+    int received = m_read_index - m_body_start;
+    if(received >= m_content_length)
+        return GET_REQUEST;
+    return NO_REQUEST;
+}
 
- }
+void http_conn::init()
+{
+    m_checked_index = 0;
+    m_start_line = 0;
+    m_check_state = CHECK_STATE_REQUESTLINE;
+    m_read_index = 0;
+    m_write_index = 0;
+    // 初始化解析结果成员
+    m_method = GET;
+    memset(m_url, 0, sizeof(m_url));
+    memset(m_version, 0, sizeof(m_version));
+    memset(m_host, 0, sizeof(m_host));
+    m_content_length = 0;
+    m_body_start = 0;
+    m_keepalive = false;
 
+    memset(m_real_file, 0, sizeof(m_real_file));
+    memset(&m_file_stat, 0, sizeof(m_file_stat));
+}
 
+http_conn::HTTP_CODE http_conn::do_request()
+{
+    // 1. 拼接文件路径: doc_root + url
+    strcpy(m_real_file, doc_root);
+    strcat(m_real_file, m_url);
+
+    // 2. 如果 URL 以 '/' 结尾，默认补 index.html
+    size_t url_len = strlen(m_url);
+    if(url_len > 0 && m_url[url_len - 1] == '/')
+    {
+        strcat(m_real_file, "index.html");
+    }
+    // 如果 URL 就是 "/"，也指向 index.html
+    else if(url_len == 0 || (url_len == 1 && m_url[0] == '/'))
+    {
+        strcat(m_real_file, "/index.html");
+    }
+
+    // 3. stat 检查文件
+    int ret = stat(m_real_file, &m_file_stat);
+    if(ret == -1)
+    {
+        if(errno == ENOENT)
+            return NO_RESOURCE;
+        if(errno == EACCES)
+            return FORBIDDEN_REQUEST;
+        return INTERNAL_ERROR;
+    }
+
+    // 4. 目录检查
+    if(S_ISDIR(m_file_stat.st_mode))
+    {
+        return BAD_REQUEST;
+    }
+
+    // 5. 只支持 GET 和 HEAD
+    if(m_method != GET && m_method != HEAD)
+        return BAD_REQUEST;
+
+    // 6. 成功
+    return FILE_REQUEST;
+}
