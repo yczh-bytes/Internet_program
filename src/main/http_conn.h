@@ -46,7 +46,7 @@ static const char doc_root[];// 服务器静态文件根目录
     void modfd(int sockfd,int epollfd,int ev);
     void init(int sockfd,struct sockaddr_in client_address);
     void close_conn();
-    bool add_response(const char* fmt);//字符串拼接函数
+    bool add_response(const char* fmt, ...);//字符串拼接函数
     bool read();//非阻塞读取
     bool write();//非阻塞写入
     
@@ -119,5 +119,12 @@ struct stat m_file_stat; //stat()获取的文件信息(大小，权限等)
 //内联函数返回当前起始行位置
 char* get_line(){return m_read_buf+m_start_line;}
 void init();//初始化
+
+    //响应构建函数
+    void response_200();
+    void response_400();
+    void response_403();
+    void response_404();
+    void response_500();
 
 };

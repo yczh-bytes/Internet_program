@@ -124,12 +124,7 @@ bool http_conn::add_response(const char* fmt,...)
     va_end(args);
 
     //检查是否溢出
-    if(write_space<0)
-    {
-        return false;
-    }
-
-    if(write_space>=0)
+    if(true_write < 0 || true_write >= write_space)
     {
         m_write_index = write_buffer_size - 1;
         m_write_buf[m_write_index]='\0';
@@ -194,37 +189,35 @@ void http_conn::process()
 
     case BAD_REQUEST://解析出错
     {
-        response_404();//构建404错误响应
-        modfd(sockfd,epollfd,EPOLLOUT);
+        response_400();
+        modfd(m_sockfd,m_epollfd,EPOLLOUT);
         return;
     }
 
-    case NO_REQUEST://文件不存在
+    case NO_RESOURCE://文件不存在
     {
-        response_400();//构建400错误响应
-        modfd(sockfd,epollfd,EPOLLOUT);
+        response_404();
+        modfd(m_sockfd,m_epollfd,EPOLLOUT);
         return;
     }
 
     case FORBIDDEN_REQUEST://无访问权限
     {
-        response_403();//构建403错误响应
-        modfd(sockfd,epollfd,EPOLLOUT);
+        response_403();
+        modfd(m_sockfd,m_epollfd,EPOLLOUT);
         return;
     }
     case INTERNAL_ERROR://服务器内部错误
     {
-        response_500();//构建500错误响应
-        modfd(sockfd,epollfd,EPOLLOUT);
-
+        response_500();
+        modfd(m_sockfd,m_epollfd,EPOLLOUT);
         return;
     }
 
-    case FILE_REQUEST://静态文件出错
+    case FILE_REQUEST://静态文件请求
     {
-        response_200();//构建200错误响应
-        modfd(sockfd,epollfd,EPOLLOUT);
-
+        response_200();
+        modfd(m_sockfd,m_epollfd,EPOLLOUT);
         return;
     }
 
@@ -509,4 +502,69 @@ http_conn::HTTP_CODE http_conn::do_request()
 
     // 6. 成功
     return FILE_REQUEST;
+}
+
+void http_conn::response_200()
+{
+    FILE* fp = fopen(m_real_file, "rb");
+    if(!fp)
+    {
+        response_500();
+        return;
+    }
+    
+    // 构建响应头
+    add_response("HTTP/1.1 200 %s\r\n", ok_200_title);
+    add_response("Content-Type: text/html\r\n");
+    add_response("Connection: close\r\n");
+    add_response("\r\n");
+    
+    // 读取文件内容到缓冲区
+    int space = write_buffer_size - m_write_index - 1;
+    if(space > 0)
+    {
+        size_t n = fread(m_write_buf + m_write_index, 1, space, fp);
+        m_write_index += n;
+    }
+    fclose(fp);
+}
+
+void http_conn::response_400()
+{
+    add_response("HTTP/1.1 400 %s\r\n", error_400_title);
+    add_response("Content-Type: text/html\r\n");
+    add_response("Content-Length: %d\r\n", (int)strlen(error_400_form));
+    add_response("Connection: close\r\n");
+    add_response("\r\n");
+    add_response("%s", error_400_form);
+}
+
+void http_conn::response_403()
+{
+    add_response("HTTP/1.1 403 %s\r\n", error_403_title);
+    add_response("Content-Type: text/html\r\n");
+    add_response("Content-Length: %d\r\n", (int)strlen(error_403_form));
+    add_response("Connection: close\r\n");
+    add_response("\r\n");
+    add_response("%s", error_403_form);
+}
+
+void http_conn::response_404()
+{
+    add_response("HTTP/1.1 404 %s\r\n", error_404_title);
+    add_response("Content-Type: text/html\r\n");
+    add_response("Content-Length: %d\r\n", (int)strlen(error_404_form));
+    add_response("Connection: close\r\n");
+    add_response("\r\n");
+    add_response("%s", error_404_form);
+}
+
+void http_conn::response_500()
+{
+    add_response("HTTP/1.1 500 %s\r\n", error_500_title);
+    add_response("Content-Type: text/html\r\n");
+    add_response("Content-Length: %d\r\n", (int)strlen(error_500_form));
+    add_response("Connection: close\r\n");
+    add_response("\r\n");
+    add_response("%s", error_500_form);
 }
